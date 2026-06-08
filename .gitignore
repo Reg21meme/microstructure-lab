@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MicrostructureLab — data and build artifacts
+data/raw/
+data/normalized/
+data/features/
+data/results/
+cpp/build/
+*.o
+*.a
