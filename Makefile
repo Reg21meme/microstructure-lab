@@ -15,9 +15,7 @@ bench:
 
 # Demo: print reconstructed order book from real data
 demo-replay:
-	python3 -m mslab.ingest.normalize
-	python3 -m mslab.backtest.run_cpp_sim --demo
-
+	python3 python/mslab/ingest/demo_replay.py
 # Build feature Parquet
 features:
 	python3 -m mslab.features.microstructure
