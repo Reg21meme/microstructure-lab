@@ -1,5 +1,5 @@
 """
-Downloads a Binance L2 order book snapshot and depth updates,  normalizes them, and saves to Parquet.
+Downloads a Binance L2 order book snapshot and depth updates, normalizes them, and saves to Parquet.
 """
 
 import time
