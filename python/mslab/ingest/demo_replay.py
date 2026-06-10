@@ -19,7 +19,7 @@ def load_parquet_as_dicts(path: Path) -> list[dict]:
 def demo_replay(
     symbol: str = "BTCUSDT",
     print_every: int = 50,
-    slow_mode: bool = False,
+    slow_mode: bool = True,
 ):
     """
     Replay the order book update by update.

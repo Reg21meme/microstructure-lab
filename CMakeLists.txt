@@ -13,14 +13,16 @@ endif()
 # Compiler warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Find dependencies
-find_package(pybind11 REQUIRED)
+# Find pybind11
+find_package(pybind11 CONFIG REQUIRED)
 
-# Core library (all your engine code goes here)
-add_library(mslab_core
+# Core library
+# Core library
+add_library(mslab_core STATIC
     cpp/src/book.cpp
 )
 target_include_directories(mslab_core PUBLIC cpp/include)
+set_target_properties(mslab_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Python bindings
 pybind11_add_module(mslab_bindings cpp/src/bindings.cpp)
