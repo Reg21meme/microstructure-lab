@@ -24,8 +24,10 @@ jobs:
             pybind11-dev
 
       - name: Install Python dependencies
-        run: pip3 install -e . --break-system-packages
-
+        run: |
+          pip3 install pytest --break-system-packages
+          pip3 install -e . --break-system-packages
+          
       - name: Build C++ engine
         run: |
           cmake -S . -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -34,7 +36,7 @@ jobs:
       - name: Run C++ tests
         run: ctest --test-dir cpp/build --output-on-failure
 
-      - name: Run C++ benchmarks (smoke test)
+      - name: Run C++ benchmarks
         run: |
           ./cpp/build/cpp/bench/mslab_bench \
             --benchmark_min_time=0.1s \
