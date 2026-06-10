@@ -17,18 +17,28 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build python3 python3-pip
+          sudo apt-get install -y \
+            build-essential cmake ninja-build \
+            python3 python3-pip \
+            catch2 libbenchmark-dev \
+            pybind11-dev
 
       - name: Install Python dependencies
         run: pip3 install -e . --break-system-packages
 
       - name: Build C++ engine
         run: |
-          cmake -S cpp -B cpp/build -G Ninja
+          cmake -S . -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build cpp/build
 
       - name: Run C++ tests
-        run: cd cpp/build && ctest --output-on-failure
+        run: ctest --test-dir cpp/build --output-on-failure
+
+      - name: Run C++ benchmarks (smoke test)
+        run: |
+          ./cpp/build/cpp/bench/mslab_bench \
+            --benchmark_min_time=0.1s \
+            --benchmark_repetitions=1
 
       - name: Run Python tests
         run: python3 -m pytest python/ -v
