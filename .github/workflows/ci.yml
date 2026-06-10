@@ -24,9 +24,7 @@ jobs:
             pybind11-dev
 
       - name: Install Python dependencies
-        run: |
-          pip3 install pytest --break-system-packages
-          pip3 install -e . --break-system-packages
+        run: pip3 install -e ".[dev]" --break-system-packages
           
       - name: Build C++ engine
         run: |

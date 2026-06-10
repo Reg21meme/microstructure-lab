@@ -29,3 +29,9 @@ line-length = 88
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "websocket-client==1.9.0",
+]
