@@ -95,3 +95,115 @@ def compute_features(book_snapshot: dict) -> dict:
         "depth_imbalance_10": di_10,
         "book_pressure"     : pressure,
     }
+def compute_ofi_single(prev_snapshot: dict, curr_snapshot: dict) -> float:
+    """
+    Compute single-level Order Flow Imbalance (OFI) between two snapshots.
+
+    Uses only the best bid and best ask level (top of book).
+
+    Parameters
+    ----------
+    prev_snapshot : book snapshot at time T   (same format as compute_features input)
+    curr_snapshot : book snapshot at time T+1
+
+    Returns
+    -------
+    float — OFI value. Positive = net buying pressure. Negative = net selling pressure.
+    """
+    prev_bids = prev_snapshot["bids"]
+    prev_asks = prev_snapshot["asks"]
+    curr_bids = curr_snapshot["bids"]
+    curr_asks = curr_snapshot["asks"]
+
+    if not prev_bids or not prev_asks or not curr_bids or not curr_asks:
+        return np.nan
+
+    # ── Bid side contribution ────────────────────────────────────────────────
+    old_bid_price, old_bid_size = prev_bids[0]
+    new_bid_price, new_bid_size = curr_bids[0]
+
+    if new_bid_price > old_bid_price:
+        # Best bid price improved — aggressive new buyer entered
+        ofi_bid = new_bid_size
+    elif new_bid_price == old_bid_price:
+        # Same price level — measure size change
+        ofi_bid = new_bid_size - old_bid_size
+    else:
+        # Best bid price dropped — buyers retreated, old volume gone
+        ofi_bid = -old_bid_size
+
+    # ── Ask side contribution (mirror image) ─────────────────────────────────
+    old_ask_price, old_ask_size = prev_asks[0]
+    new_ask_price, new_ask_size = curr_asks[0]
+
+    if new_ask_price < old_ask_price:
+        # Best ask price improved (dropped) — aggressive new seller entered
+        ofi_ask = -new_ask_size
+    elif new_ask_price == old_ask_price:
+        # Same price level — measure size change (increase = more supply = negative)
+        ofi_ask = old_ask_size - new_ask_size
+    else:
+        # Best ask price rose — sellers retreated, old volume gone
+        ofi_ask = old_ask_size
+
+    return ofi_bid - ofi_ask
+
+
+def compute_mlofi(prev_snapshot: dict,
+                  curr_snapshot: dict,
+                  levels: int = 10) -> list[float]:
+    """
+    Compute Multi-Level OFI across the top k price levels.
+
+    Applies the same OFI formula independently at each level.
+    Levels are matched by rank (level 1 = best, level 2 = second best, etc.)
+    not by price — because prices shift between snapshots.
+
+    Parameters
+    ----------
+    prev_snapshot : book snapshot at time T
+    curr_snapshot : book snapshot at time T+1
+    levels        : number of levels to compute (default 10)
+
+    Returns
+    -------
+    list of float, length = levels. Element i is OFI at level i+1.
+    """
+    prev_bids = prev_snapshot["bids"][:levels]
+    prev_asks = prev_snapshot["asks"][:levels]
+    curr_bids = curr_snapshot["bids"][:levels]
+    curr_asks = curr_snapshot["asks"][:levels]
+
+    mlofi = []
+
+    for i in range(levels):
+        # If either snapshot doesn't have this level, record nan
+        if (i >= len(prev_bids) or i >= len(curr_bids) or
+                i >= len(prev_asks) or i >= len(curr_asks)):
+            mlofi.append(np.nan)
+            continue
+
+        old_bid_price, old_bid_size = prev_bids[i]
+        new_bid_price, new_bid_size = curr_bids[i]
+        old_ask_price, old_ask_size = prev_asks[i]
+        new_ask_price, new_ask_size = curr_asks[i]
+
+        # Bid contribution at level i
+        if new_bid_price > old_bid_price:
+            ofi_bid = new_bid_size
+        elif new_bid_price == old_bid_price:
+            ofi_bid = new_bid_size - old_bid_size
+        else:
+            ofi_bid = -old_bid_size
+
+        # Ask contribution at level i
+        if new_ask_price < old_ask_price:
+            ofi_ask = -new_ask_size
+        elif new_ask_price == old_ask_price:
+            ofi_ask = old_ask_size - new_ask_size
+        else:
+            ofi_ask = old_ask_size
+
+        mlofi.append(ofi_bid - ofi_ask)
+
+    return mlofi

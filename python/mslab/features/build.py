@@ -10,6 +10,7 @@ Usage:
 
 import sys
 import pathlib
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pandas as pd
@@ -19,7 +20,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "cpp" / "build"))
 
 import mslab_bindings
-from mslab.features.microstructure import compute_features
+from mslab.features.microstructure import (
+    compute_features,
+    compute_ofi_single,
+    compute_mlofi,
+)
 
 
 def load_parquet(path: pathlib.Path) -> list[dict]:
@@ -92,8 +97,9 @@ def run_pipeline(symbol: str = "BTCUSDT",
           f"{book.ask_levels} ask levels, seq={book.last_seq}")
 
     # ── Replay updates and capture feature snapshots ─────────────────────────
-    features = []
+    features     = []
     update_count = 0
+    prev_snap    = None  # previous book snapshot for OFI computation
 
     for row in upd_rows:
         is_bid = row["side"] == "bid"
@@ -108,9 +114,23 @@ def run_pipeline(symbol: str = "BTCUSDT",
             snap = get_book_snapshot(book, row["ts_local"])
             if snap is None:
                 continue
+
             feat = compute_features(snap)
             if feat is None:
                 continue
+
+            # OFI requires a previous snapshot — skip the first one
+            if prev_snap is not None:
+                feat["ofi"]   = compute_ofi_single(prev_snap, snap)
+                mlofi         = compute_mlofi(prev_snap, snap, levels=10)
+                for i, val in enumerate(mlofi):
+                    feat[f"mlofi_{i+1}"] = val
+            else:
+                feat["ofi"] = np.nan
+                for i in range(10):
+                    feat[f"mlofi_{i+1}"] = np.nan
+
+            prev_snap = snap
             features.append(feat)
 
     print(f"Replayed {update_count} updates, "
