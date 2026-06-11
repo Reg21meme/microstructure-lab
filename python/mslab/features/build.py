@@ -183,6 +183,13 @@ def run_pipeline(symbol: str = "BTCUSDT",
         df[col] = values
     print(f"Markouts computed at horizons [5, 10, 20] snapshots")
 
+    # ── Filter invalid rows ───────────────────────────────────────────────────
+    n_before = len(df)
+    df = df[df["spread"] > 0].reset_index(drop=True)
+    n_after  = len(df)
+    print(f"Filtered {n_before - n_after} negative/zero spread rows "
+          f"({(n_before - n_after)/n_before*100:.1f}% of data)")
+
     # ── Write output Parquet ──────────────────────────────────────────────────
     output_path = output_dir / f"{symbol}_features.parquet"
     table = pa.Table.from_pandas(df)

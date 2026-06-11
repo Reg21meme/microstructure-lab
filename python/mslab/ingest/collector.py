@@ -231,9 +231,9 @@ def collect(symbol: str = "BTCUSDT",
     print(f"  First update seq_end:   {first_update_seq_end}")
 
     if first_update_seq_start <= snapshot_seq + 1:
-        print("  ✓ Synchronized correctly — no gap between snapshot and updates")
+        print("    Synchronized correctly — no gap between snapshot and updates")
     else:
-        print("  ✗ Gap detected — snapshot and updates may not align")
+        print("    Gap detected — snapshot and updates may not align")
         print("    Try running again")
 
 
