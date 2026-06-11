@@ -36,6 +36,8 @@ PYBIND11_MODULE(mslab_bindings, m) {
         .def_property_readonly("bid_levels",    &mslab::OrderBook::bid_levels)
         .def_property_readonly("ask_levels",    &mslab::OrderBook::ask_levels)
         .def_property_readonly("symbol",        &mslab::OrderBook::symbol)
+        .def("get_bids", &mslab::OrderBook::get_bids, py::arg("n"))
+        .def("get_asks", &mslab::OrderBook::get_asks, py::arg("n"))
         .def("__repr__", [](const mslab::OrderBook& book) {
             return "OrderBook(symbol=" + std::string(book.symbol()) +
                    ", bids=" + std::to_string(book.bid_levels()) +

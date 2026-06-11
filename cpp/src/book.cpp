@@ -74,5 +74,22 @@ std::optional<double> OrderBook::mid_price() const {
     if (!bid || !ask) return std::nullopt;
     return (bid->price + ask->price) / 2.0;
 }
+std::vector<std::pair<double, double>> OrderBook::get_bids(size_t n) const {
+    std::vector<std::pair<double, double>> result;
+    result.reserve(n);
+    for (auto it = bids_.begin(); it != bids_.end() && result.size() < n; ++it) {
+        result.emplace_back(it->first, it->second);
+    }
+    return result;
+}
+
+std::vector<std::pair<double, double>> OrderBook::get_asks(size_t n) const {
+    std::vector<std::pair<double, double>> result;
+    result.reserve(n);
+    for (auto it = asks_.begin(); it != asks_.end() && result.size() < n; ++it) {
+        result.emplace_back(it->first, it->second);
+    }
+    return result;
+}
 
 } // namespace mslab

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vector>
 #include <map>
 #include <optional>
 #include <string>
@@ -51,6 +52,12 @@ public:
     size_t  bid_levels()     const { return bids_.size(); }
     size_t  ask_levels()     const { return asks_.size(); }
     const std::string& symbol() const { return symbol_; }
+    // Return top-n bid levels as (price, size) pairs, highest price first
+    std::vector<std::pair<double, double>> get_bids(size_t n) const;
+
+    // Return top-n ask levels as (price, size) pairs, lowest price first
+    std::vector<std::pair<double, double>> get_asks(size_t n) const;
+
 
 private:
     std::string symbol_;
