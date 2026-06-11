@@ -12,6 +12,8 @@ import sys
 import pathlib
 import numpy as np
 import pyarrow as pa
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 import pyarrow.parquet as pq
 import pandas as pd
 
@@ -140,12 +142,36 @@ def run_pipeline(symbol: str = "BTCUSDT",
         print("ERROR: no features generated — check data")
         return
 
+# ── Compute MLOFI PC1 ─────────────────────────────────────────────────────
+    # Fit PCA on the 10 MLOFI columns to get a single summary feature.
+    # Drop rows where any MLOFI level is NaN (first row) before fitting.
+    df = pd.DataFrame(features)
+
+    mlofi_cols = [f"mlofi_{i+1}" for i in range(10)]
+    mlofi_valid = df[mlofi_cols].dropna()
+
+    if len(mlofi_valid) > 10:
+        scaler = StandardScaler()
+        mlofi_scaled = scaler.fit_transform(mlofi_valid)
+
+        pca = PCA(n_components=1)
+        pc1_values = pca.fit_transform(mlofi_scaled).flatten()
+
+        # Assign PC1 back — NaN for the first row that was dropped
+        df["mlofi_pc1"] = np.nan
+        df.loc[mlofi_valid.index, "mlofi_pc1"] = pc1_values
+
+        explained = pca.explained_variance_ratio_[0] * 100
+        print(f"MLOFI PC1 explains {explained:.1f}% of variance")
+    else:
+        df["mlofi_pc1"] = np.nan
+        print("Not enough data for PCA")
+
     # ── Write output Parquet ──────────────────────────────────────────────────
     output_path = output_dir / f"{symbol}_features.parquet"
-    df = pd.DataFrame(features)
     table = pa.Table.from_pandas(df)
     pq.write_table(table, output_path)
-
+    
     print(f"Features written to {output_path}")
     print(f"Schema: {table.schema}")
     print(f"\nSample (first 5 rows):")

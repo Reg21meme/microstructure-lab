@@ -86,15 +86,33 @@ def compute_features(book_snapshot: dict) -> dict:
 
     pressure = book_pressure()
 
+# ── Micro-price (Stoikov) ─────────────────────────────────────────────────
+    # Weights best bid and best ask by the opposite side's volume.
+    # Reflects where price is more likely to move given current book imbalance.
+    best_bid_size = bids[0][1]
+    best_ask_size = asks[0][1]
+    total_size    = best_bid_size + best_ask_size
+
+    if total_size > 0:
+        micro_price = (best_bid * (best_ask_size / total_size) +
+                       best_ask * (best_bid_size / total_size))
+        micro_price_deviation = micro_price - mid_price
+    else:
+        micro_price           = np.nan
+        micro_price_deviation = np.nan
+
     return {
-        "ts_local"          : ts,
-        "mid_price"         : mid_price,
-        "spread"            : spread,
-        "relative_spread"   : relative_spread,
-        "depth_imbalance_5" : di_5,
-        "depth_imbalance_10": di_10,
-        "book_pressure"     : pressure,
+        "ts_local"             : ts,
+        "mid_price"            : mid_price,
+        "spread"               : spread,
+        "relative_spread"      : relative_spread,
+        "depth_imbalance_5"    : di_5,
+        "depth_imbalance_10"   : di_10,
+        "book_pressure"        : pressure,
+        "micro_price"          : micro_price,
+        "micro_price_deviation": micro_price_deviation,
     }
+
 def compute_ofi_single(prev_snapshot: dict, curr_snapshot: dict) -> float:
     """
     Compute single-level Order Flow Imbalance (OFI) between two snapshots.
