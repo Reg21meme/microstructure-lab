@@ -17,6 +17,8 @@ from sklearn.preprocessing import StandardScaler
 import pyarrow.parquet as pq
 import pandas as pd
 
+from python.mslab import features
+
 # Add cpp/build to path for mslab_bindings
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "cpp" / "build"))
@@ -61,8 +63,8 @@ def get_book_snapshot(book: mslab_bindings.OrderBook,
     }
 
 
-def run_pipeline(symbol: str = "BTCUSDT",
-                 snapshot_every: int = 10) -> None:
+def run_pipeline(symbol: str = "BTCUSDT") -> None:
+
     """
     Replay book updates and compute features every N updates.
 
@@ -101,9 +103,10 @@ def run_pipeline(symbol: str = "BTCUSDT",
           f"{book.ask_levels} ask levels, seq={book.last_seq}")
 
     # ── Replay updates and capture feature snapshots ─────────────────────────
-    features     = []
-    update_count = 0
-    prev_snap    = None  # previous book snapshot for OFI computation
+    features          = []
+    prev_snap         = None
+    last_snap_ts      = -1
+    snap_interval_ms  = 1000  # one snapshot per 1000ms 
 
     for row in upd_rows:
         is_bid = row["side"] == "bid"
@@ -111,35 +114,37 @@ def run_pipeline(symbol: str = "BTCUSDT",
             row["price"], row["size"], is_bid,
             row["seq_start"], row["seq"]
         )
-        update_count += 1
 
-        # Capture snapshot every N updates
-        if update_count % snapshot_every == 0:
-            snap = get_book_snapshot(book, row["ts_local"])
-            if snap is None:
-                continue
+        # Capture snapshot at most once per 100ms window
+        ts = row["ts_local"]
+        if ts - last_snap_ts < snap_interval_ms:
+            continue
 
-            feat = compute_features(snap)
-            if feat is None:
-                continue
+        last_snap_ts = ts
+        snap = get_book_snapshot(book, ts)
+        if snap is None:
+            continue
 
-            # OFI requires a previous snapshot 
-            if prev_snap is not None:
-                feat["ofi"]   = compute_ofi_single(prev_snap, snap)
-                mlofi         = compute_mlofi(prev_snap, snap, levels=10)
-                for i, val in enumerate(mlofi):
-                    feat[f"mlofi_{i+1}"] = val
-            else:
-                feat["ofi"] = np.nan
-                for i in range(10):
-                    feat[f"mlofi_{i+1}"] = np.nan
+        feat = compute_features(snap)
+        if feat is None:
+            continue
 
-            prev_snap = snap
-            features.append(feat)
+        # OFI requires a previous snapshot
+        if prev_snap is not None:
+            feat["ofi"] = compute_ofi_single(prev_snap, snap)
+            mlofi       = compute_mlofi(prev_snap, snap, levels=10)
+            for i, val in enumerate(mlofi):
+                feat[f"mlofi_{i+1}"] = val
+        else:
+            feat["ofi"] = np.nan
+            for i in range(10):
+                feat[f"mlofi_{i+1}"] = np.nan
 
-    print(f"Replayed {update_count} updates, "
+        prev_snap = snap
+        features.append(feat)
+
+    print(f"Replayed {len(upd_rows)} updates, "
           f"captured {len(features)} feature snapshots")
-
     if not features:
         print("ERROR: no features generated — check data")
         return

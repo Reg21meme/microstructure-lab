@@ -42,7 +42,7 @@ def fetch_snapshot(symbol: str, depth: int = 100) -> dict:
 
 def normalize_snapshot(raw: dict, symbol: str) -> list[dict]:
     """Convert raw snapshot response to normalized row dicts."""
-    ts_local = int(time.time() * 1000)
+    ts_local = int(time.time() * 1000)  # REST API has no exchange timestamp
     seq      = raw["lastUpdateId"]
     rows     = []
 
@@ -71,7 +71,9 @@ def normalize_snapshot(raw: dict, symbol: str) -> list[dict]:
 
 def normalize_update(msg: dict, symbol: str) -> list[dict]:
     """Convert a single WebSocket depth update to normalized row dicts."""
-    ts_local  = int(time.time() * 1000)
+    # Use exchange event time (E) from the message — this is the real timestamp
+    # msg["E"] is the event time in milliseconds from Binance
+    ts_local  = msg.get("E", int(time.time() * 1000))
     seq_start = msg["U"]
     seq_end   = msg["u"]
     rows      = []
