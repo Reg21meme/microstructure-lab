@@ -225,3 +225,68 @@ def compute_mlofi(prev_snapshot: dict,
         mlofi.append(ofi_bid - ofi_ask)
 
     return mlofi
+
+def compute_realized_vol(mid_prices: list[float],
+                         window: int = 20) -> list[float]:
+    """
+    Compute rolling realized volatility from a sequence of mid-prices.
+
+    Parameters
+    ----------
+    mid_prices : list of mid-price values in time order
+    window     : number of returns to include in each rolling std
+
+    Returns
+    -------
+    list of float, same length as mid_prices.
+    First (window) values are NaN — not enough history yet.
+    """
+    prices  = np.array(mid_prices)
+    n       = len(prices)
+    vol     = np.full(n, np.nan)
+
+    if n < 2:
+        return vol.tolist()
+
+    # Compute log returns: log(p_t / p_{t-1})
+    # Log returns are more statistically well-behaved than simple returns
+    log_returns = np.log(prices[1:] / prices[:-1])
+
+    for i in range(window, n):
+        # Rolling window of log returns ending at position i
+        window_returns = log_returns[i - window: i]
+        vol[i]         = np.std(window_returns, ddof=1)
+
+    return vol.tolist()
+
+
+def compute_markouts(mid_prices: list[float],
+                     horizons: list[int] = [5, 10, 20]) -> dict[str, list[float]]:
+    """
+    Compute forward mid-price moves at multiple horizons.
+
+    These are LABELS / post-trade analysis only — never use as model inputs.
+    Named with future_ prefix to make this explicit.
+
+    Parameters
+    ----------
+    mid_prices : list of mid-price values in time order
+    horizons   : list of forward snapshot counts to compute markouts for
+
+    Returns
+    -------
+    dict mapping feature name -> list of float, same length as mid_prices.
+    Last (horizon) values are NaN — no future data available.
+    """
+    prices  = np.array(mid_prices)
+    n       = len(prices)
+    result  = {}
+
+    for h in horizons:
+        markout = np.full(n, np.nan)
+        # For each position, look h steps forward
+        # Last h positions have no future data
+        markout[:n - h] = prices[h:] - prices[:n - h]
+        result[f"future_mid_move_{h}"] = markout.tolist()
+
+    return result

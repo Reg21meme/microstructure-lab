@@ -26,6 +26,8 @@ from mslab.features.microstructure import (
     compute_features,
     compute_ofi_single,
     compute_mlofi,
+    compute_realized_vol,
+    compute_markouts,
 )
 
 
@@ -121,7 +123,7 @@ def run_pipeline(symbol: str = "BTCUSDT",
             if feat is None:
                 continue
 
-            # OFI requires a previous snapshot — skip the first one
+            # OFI requires a previous snapshot 
             if prev_snap is not None:
                 feat["ofi"]   = compute_ofi_single(prev_snap, snap)
                 mlofi         = compute_mlofi(prev_snap, snap, levels=10)
@@ -167,11 +169,25 @@ def run_pipeline(symbol: str = "BTCUSDT",
         df["mlofi_pc1"] = np.nan
         print("Not enough data for PCA")
 
+    # ── Realized volatility ───────────────────────────────────────────────────
+    mid_prices = df["mid_price"].tolist()
+    vol_values = compute_realized_vol(mid_prices, window=20)
+    df["realized_vol"] = vol_values
+    print(f"Realized vol computed (window=20), "
+          f"{sum(1 for v in vol_values if not np.isnan(v))} valid values")
+
+    # ── Markouts (forward mid-price moves) ────────────────────────────────────
+    # LABELS ONLY 
+    markouts = compute_markouts(mid_prices, horizons=[5, 10, 20])
+    for col, values in markouts.items():
+        df[col] = values
+    print(f"Markouts computed at horizons [5, 10, 20] snapshots")
+
     # ── Write output Parquet ──────────────────────────────────────────────────
     output_path = output_dir / f"{symbol}_features.parquet"
     table = pa.Table.from_pandas(df)
     pq.write_table(table, output_path)
-    
+
     print(f"Features written to {output_path}")
     print(f"Schema: {table.schema}")
     print(f"\nSample (first 5 rows):")
