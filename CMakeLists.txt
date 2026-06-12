@@ -20,6 +20,7 @@ find_package(pybind11 CONFIG REQUIRED)
 # Core library
 add_library(mslab_core STATIC
     cpp/src/book.cpp
+    cpp/src/execution_sim.cpp
 )
 target_include_directories(mslab_core PUBLIC cpp/include)
 set_target_properties(mslab_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
