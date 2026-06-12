@@ -185,21 +185,38 @@ def train_logistic(train: pd.DataFrame,
 
 
 def run(symbol: str = "BTCUSDT") -> None:
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+    from mslab.research.dataset import run_walk_forward
+
     print(f"Training baseline models for {symbol}")
     print("=" * 50)
 
     df          = load_clean_data(symbol)
     train, test = time_split(df)
 
-    ridge_results   = train_ridge(train, test)
+    ridge_results    = train_ridge(train, test)
     logistic_results = train_logistic(train, test)
 
-    # Save results for validate.py
+    # ── Purged walk-forward CV ────────────────────────────────────────────────
+    print("\nPurged Walk-Forward CV (Ridge, label=future_mid_move_5):")
+    wf_results = run_walk_forward(
+        df            = df,
+        feature_cols  = FEATURE_COLS,
+        label_col     = LABEL_REGRESSION,
+        model         = Ridge(alpha=1.0),
+        scaler_class  = StandardScaler,
+        n_splits      = 5,
+        label_horizon = 5,
+    )
+
+# Save results for validate.py
     results = {
-        "ridge"   : ridge_results,
-        "logistic": logistic_results,
-        "train"   : train,
-        "test"    : test,
+        "ridge"      : ridge_results,
+        "logistic"   : logistic_results,
+        "walk_forward": wf_results,
+        "train"      : train,
+        "test"       : test,
     }
     out_path = OUTPUT_DIR / f"{symbol}_baseline_results.pkl"
     with open(out_path, "wb") as f:
@@ -209,12 +226,14 @@ def run(symbol: str = "BTCUSDT") -> None:
     print("\n" + "=" * 50)
     print("SUMMARY")
     print("=" * 50)
-    print(f"Ridge  test IC     : {ridge_results['ic_test']:.4f}")
-    print(f"Ridge  test Rank-IC: {ridge_results['rank_ic_test']:.4f}")
-    print(f"Logistic test AUC  : {logistic_results['auc_test']:.4f}")
-    print(f"Logistic test Acc  : {logistic_results['acc_test']:.4f}")
-    print(f"Naive baseline     : {logistic_results['baseline']:.4f}")
-
+    print(f"Ridge  test IC          : {ridge_results['ic_test']:.4f}")
+    print(f"Ridge  test Rank-IC     : {ridge_results['rank_ic_test']:.4f}")
+    print(f"Logistic test AUC       : {logistic_results['auc_test']:.4f}")
+    print(f"Logistic test Acc       : {logistic_results['acc_test']:.4f}")
+    print(f"Naive baseline          : {logistic_results['baseline']:.4f}")
+    print(f"Walk-forward mean IC    : {wf_results['ic_mean']:.4f} ± {wf_results['ic_std']:.4f}")
+    print(f"Walk-forward mean Rank-IC: {wf_results['rank_ic_mean']:.4f}")
+    print(f"Walk-forward IC t-stat  : {wf_results['ic_t_stat']:.2f}")
 
 if __name__ == "__main__":
     run()
