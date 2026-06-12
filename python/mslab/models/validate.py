@@ -188,6 +188,166 @@ def plot_ic_decay(decay_df: pd.DataFrame) -> None:
     plt.show()
     print(f"Saved to {out}")
 
+def plot_calibration(y_test: np.ndarray,
+                     y_prob: np.ndarray,
+                     n_bins: int = 10) -> dict:
+    """
+    Plot calibration curve and compute Brier score.
+
+    Parameters
+    ----------
+    y_test : true binary labels (0 or 1)
+    y_prob : predicted probabilities for class 1
+    n_bins : number of probability buckets
+
+    Returns
+    -------
+    dict with brier_score and brier_skill_score
+    """
+    from sklearn.calibration import calibration_curve
+    from sklearn.metrics import brier_score_loss
+
+    # Calibration curve
+    prob_true, prob_pred = calibration_curve(y_test, y_prob, n_bins=n_bins)
+
+    # Brier score
+    brier = brier_score_loss(y_test, y_prob)
+
+    # Brier skill score vs naive baseline (always predict base rate)
+    base_rate    = y_test.mean()
+    brier_base   = brier_score_loss(y_test,
+                                    np.full_like(y_prob, base_rate))
+    brier_skill  = 1 - brier / brier_base
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # ── Calibration curve ─────────────────────────────────────────────────────
+    ax1.plot([0, 1], [0, 1], "k--", linewidth=1, label="Perfect calibration")
+    ax1.plot(prob_pred, prob_true, "o-", color="steelblue",
+             linewidth=2, markersize=6, label="Model")
+    ax1.fill_between(prob_pred, prob_true, prob_pred,
+                     alpha=0.15, color="steelblue")
+    ax1.set_xlabel("Mean predicted probability")
+    ax1.set_ylabel("Fraction of positives")
+    ax1.set_title(f"Calibration Curve\nBrier={brier:.4f}, "
+                  f"Skill={brier_skill:.4f}")
+    ax1.legend()
+    ax1.grid(alpha=0.3)
+    ax1.set_xlim(0, 1)
+    ax1.set_ylim(0, 1)
+
+    # ── Predicted probability distribution ────────────────────────────────────
+    ax2.hist(y_prob[y_test == 0], bins=30, alpha=0.6,
+             color="salmon", label="Actual down", density=True)
+    ax2.hist(y_prob[y_test == 1], bins=30, alpha=0.6,
+             color="steelblue", label="Actual up", density=True)
+    ax2.axvline(0.5, color="black", linewidth=1, linestyle="--")
+    ax2.set_xlabel("Predicted probability (up)")
+    ax2.set_ylabel("Density")
+    ax2.set_title("Predicted Probability Distribution by Outcome")
+    ax2.legend()
+    ax2.grid(alpha=0.3)
+
+    plt.tight_layout()
+    out = FIGURES / "calibration.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"Saved to {out}")
+
+    print(f"Brier score      : {brier:.4f}")
+    print(f"Brier skill score: {brier_skill:.4f} "
+          f"(>0 means beats naive baseline)")
+
+    return {
+        "brier"      : brier,
+        "brier_skill": brier_skill,
+        "prob_true"  : prob_true,
+        "prob_pred"  : prob_pred,
+    }
+
+
+def compute_deflated_sharpe(y_test: np.ndarray,
+                             y_prob: np.ndarray,
+                             n_strategies_tried: int = 1) -> dict:
+    """
+    Compute Sharpe ratio and Deflated Sharpe Ratio (DSR).
+
+    Constructs a simple PnL series: go long when model predicts up (prob > 0.5),
+    short when it predicts down. PnL = predicted_direction * actual_move.
+
+    DSR corrects for multiple testing — how many strategies did you try
+    before finding this one?
+
+    Parameters
+    ----------
+    y_test              : actual binary outcomes (0 or 1)
+    y_prob              : predicted probabilities
+    n_strategies_tried  : number of strategy configurations tested
+                          (used to compute expected max Sharpe under null)
+
+    Returns
+    -------
+    dict with sharpe, dsr, and supporting statistics
+    """
+    from scipy.stats import norm
+
+    # Simple PnL: +1 if correct direction, -1 if wrong
+    predicted_direction = (y_prob > 0.5).astype(float) * 2 - 1  # +1 or -1
+    actual_direction    = (y_test > 0.5).astype(float) * 2 - 1   # +1 or -1
+    pnl                 = predicted_direction * actual_direction   # +1 or -1
+
+    T       = len(pnl)
+    mean_r  = pnl.mean()
+    std_r   = pnl.std(ddof=1)
+    sharpe  = mean_r / std_r * np.sqrt(T) if std_r > 0 else np.nan
+
+    skew    = pd.Series(pnl).skew()
+    kurt    = pd.Series(pnl).kurt() + 3  # scipy returns excess kurtosis
+
+    # Expected maximum Sharpe under null (Bailey & López de Prado 2014)
+    # E[max SR] ≈ (1 - euler_gamma) * Z(1 - 1/N) + euler_gamma * Z(1 - 1/(N*e))
+    # Simplified approximation for small N:
+    euler_gamma = 0.5772
+    if n_strategies_tried > 1:
+        sr_star = (euler_gamma * norm.ppf(1 - 1 / n_strategies_tried) +
+                   (1 - euler_gamma) * norm.ppf(1 - 1 / (n_strategies_tried * np.e)))
+    else:
+        sr_star = 0.0  # no multiple testing adjustment needed
+
+    # DSR formula
+    if std_r > 0 and not np.isnan(sharpe):
+        sr_annualized = mean_r / std_r  # per-observation Sharpe
+        numerator     = (sr_annualized - sr_star) * np.sqrt(T - 1)
+        denominator   = np.sqrt(1 - skew * sr_annualized +
+                                ((kurt - 1) / 4) * sr_annualized ** 2)
+        if denominator > 0:
+            dsr = norm.cdf(numerator / denominator)
+        else:
+            dsr = np.nan
+    else:
+        dsr = np.nan
+
+    print(f"\nSharpe & Deflated Sharpe:")
+    print(f"  Observations        : {T}")
+    print(f"  Mean PnL per trade  : {mean_r:.4f}")
+    print(f"  Std PnL             : {std_r:.4f}")
+    print(f"  Sharpe (per obs)    : {sharpe:.4f}")
+    print(f"  Skewness            : {skew:.4f}")
+    print(f"  Kurtosis            : {kurt:.4f}")
+    print(f"  SR* (expected max)  : {sr_star:.4f}")
+    print(f"  Deflated Sharpe     : {dsr:.4f}")
+    print(f"  Interpretation      : {dsr*100:.1f}% probability of genuine edge")
+
+    return {
+        "sharpe" : sharpe,
+        "dsr"    : dsr,
+        "sr_star": sr_star,
+        "mean_r" : mean_r,
+        "std_r"  : std_r,
+        "skew"   : skew,
+        "kurt"   : kurt,
+        "T"      : T,
+    }
 
 def run(symbol: str = "BTCUSDT") -> None:
     print(f"Validation for {symbol}")
@@ -226,10 +386,50 @@ def run(symbol: str = "BTCUSDT") -> None:
     # ── Plot ──────────────────────────────────────────────────────────────────
     plot_ic_decay(decay_df)
 
-    # ── Save results ──────────────────────────────────────────────────────────
+# ── Save IC decay results ─────────────────────────────────────────────────
     out = OUTPUT_DIR / f"{symbol}_ic_decay.csv"
     decay_df.to_csv(out, index=False)
     print(f"\nIC decay results saved to {out}")
+
+    # ── Calibration and Brier score ───────────────────────────────────────────
+    print("\n" + "=" * 50)
+    print("CALIBRATION & BRIER SCORE")
+    print("=" * 50)
+
+    # Load saved logistic results
+    import pickle
+    results_path = OUTPUT_DIR / f"{symbol}_baseline_results.pkl"
+    with open(results_path, "rb") as f:
+        baseline = pickle.load(f)
+
+    y_test = baseline["logistic"]["y_test"]
+    y_prob = baseline["logistic"]["y_prob_test"]
+
+    cal_results = plot_calibration(y_test, y_prob)
+
+    # ── Deflated Sharpe ───────────────────────────────────────────────────────
+    print("\n" + "=" * 50)
+    print("DEFLATED SHARPE RATIO")
+    print("=" * 50)
+    dsr_results = compute_deflated_sharpe(
+        y_test             = y_test,
+        y_prob             = y_prob,
+        n_strategies_tried = 1,
+    )
+
+    # ── Final summary ─────────────────────────────────────────────────────────
+    print("\n" + "=" * 50)
+    print("FULL VALIDATION SUMMARY")
+    print("=" * 50)
+    print(f"IC at 5s horizon    : {decay_df.iloc[0]['ic_mean']:.4f} "
+          f"(NW t={decay_df.iloc[0]['t_nw']:.2f})")
+    print(f"IC at 10s horizon   : {decay_df.iloc[1]['ic_mean']:.4f} "
+          f"(NW t={decay_df.iloc[1]['t_nw']:.2f})")
+    print(f"IC at 20s horizon   : {decay_df.iloc[2]['ic_mean']:.4f} "
+          f"(NW t={decay_df.iloc[2]['t_nw']:.2f})")
+    print(f"Brier skill score   : {cal_results['brier_skill']:.4f}")
+    print(f"Sharpe              : {dsr_results['sharpe']:.4f}")
+    print(f"Deflated Sharpe     : {dsr_results['dsr']:.4f}")
 
 
 if __name__ == "__main__":
