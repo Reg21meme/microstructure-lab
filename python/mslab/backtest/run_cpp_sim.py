@@ -36,7 +36,7 @@ LATENCY_MS    = 10.0       # simulated order latency
 TAKER_FEE     = 0.0004     # Binance taker fee
 MAKER_FEE     = -0.0001    # Binance maker rebate
 MAX_POSITION  = 1.0        # max 1 BTC position
-MAX_DRAWDOWN  = 500.0      # kill switch at $500 loss
+MAX_DRAWDOWN  = 5000.0      # kill switch at $500 loss
 SIGNAL_THRESH = 0.10       # minimum predicted move to trigger order (dollars)
 ORDER_SIZE    = 0.01       # order size in BTC per trade
 
@@ -208,24 +208,55 @@ def run_simulation(latency_ms: float = LATENCY_MS,
         # Generate signal
         predicted_move = generate_signal(model, scaler, feat_row)
 
-        # Submit order if signal exceeds threshold
-        if abs(predicted_move) < SIGNAL_THRESH:
-            continue
+        mid      = feat_row["mid_price"]
+        position = sim.position().position
 
-        n_orders += 1
-        if predicted_move > 0:
-            # Predict up — buy
-            best_ask = None
-            # Use current mid as limit price approximation
-            mid = feat_row["mid_price"]
-            sim.submit_order(mb.Side.BUY, mb.OrderType.LIMIT,
-                             mid + 0.01, ORDER_SIZE, ts_ns)
+        # ── Entry and exit logic ──────────────────────────────────────────────
+        if predicted_move > SIGNAL_THRESH:
+            # Signal predicts up
+            if position < MAX_POSITION:
+                # Buy to open or add to long
+                n_orders += 1
+                sim.submit_order(mb.Side.BUY, mb.OrderType.LIMIT,
+                                 mid + 0.01, ORDER_SIZE, ts_ns)
+            elif position < 0:
+                # Close short position
+                n_orders += 1
+                sim.submit_order(mb.Side.BUY, mb.OrderType.LIMIT,
+                                 mid + 0.01,
+                                 min(ORDER_SIZE, abs(position)),
+                                 ts_ns)
+
+        elif predicted_move < -SIGNAL_THRESH:
+            # Signal predicts down
+            if position > -MAX_POSITION:
+                # Sell to open or add to short
+                n_orders += 1
+                sim.submit_order(mb.Side.SELL, mb.OrderType.LIMIT,
+                                 mid - 0.01, ORDER_SIZE, ts_ns)
+            elif position > 0:
+                # Close long position
+                n_orders += 1
+                sim.submit_order(mb.Side.SELL, mb.OrderType.LIMIT,
+                                 mid - 0.01,
+                                 min(ORDER_SIZE, position),
+                                 ts_ns)
+
         else:
-            # Predict down — sell
-            mid = feat_row["mid_price"]
-            sim.submit_order(mb.Side.SELL, mb.OrderType.LIMIT,
-                             mid - 0.01, ORDER_SIZE, ts_ns)
-
+            # Signal near zero — go flat if holding a position
+            if abs(position) > ORDER_SIZE / 2:
+                n_orders += 1
+                if position > 0:
+                    sim.submit_order(mb.Side.SELL, mb.OrderType.IOC,
+                                     mid - 0.01,
+                                     min(ORDER_SIZE, position),
+                                     ts_ns)
+                else:
+                    sim.submit_order(mb.Side.BUY, mb.OrderType.IOC,
+                                     mid + 0.01,
+                                     min(ORDER_SIZE, abs(position)),
+                                     ts_ns)
+                    
     # ── Collect results ───────────────────────────────────────────────────────
     fills    = sim.fills()
     position = sim.position()
