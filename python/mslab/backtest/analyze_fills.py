@@ -142,69 +142,83 @@ def plot_headline_chart(naive_fills: pd.DataFrame,
     """
     naive_pnl = compute_pnl_series(naive_fills)
     real_pnl  = compute_pnl_series(real_fills)
+    naive_sum = compute_summary(naive_fills, "Naive")
+    real_sum  = compute_summary(real_fills,  "Realistic")
 
-    fig = plt.figure(figsize=(14, 10))
-    gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.4, wspace=0.3)
+    # ── Style ─────────────────────────────────────────────────────────────────
+    BLUE   = "#2563EB"
+    RED    = "#DC2626"
+    GRAY   = "#6B7280"
+    BG     = "#F9FAFB"
 
-    # ── Main chart: cumulative PnL comparison ─────────────────────────────────
-    ax_main = fig.add_subplot(gs[0, :])
+    fig, (ax_main, ax_decomp) = plt.subplots(
+        2, 1, figsize=(12, 9),
+        gridspec_kw={"height_ratios": [2, 1]},
+    )
+    fig.patch.set_facecolor(BG)
+    for ax in (ax_main, ax_decomp):
+        ax.set_facecolor(BG)
 
+    # ── Top panel: cumulative PnL ─────────────────────────────────────────────
     if not naive_pnl.empty:
         t_naive = (naive_pnl["fill_ts_ns"] -
                    naive_pnl["fill_ts_ns"].iloc[0]) / 1e9
         ax_main.plot(t_naive, naive_pnl["cum_pnl"],
-                     color="steelblue", linewidth=1.5,
-                     label="Naive (no fees, no latency)")
+                     color=BLUE, linewidth=2.0,
+                     label="Naive  (no fees · no latency · no queue)")
 
     if not real_pnl.empty:
         t_real = (real_pnl["fill_ts_ns"] -
                   real_pnl["fill_ts_ns"].iloc[0]) / 1e9
         ax_main.plot(t_real, real_pnl["cum_pnl"],
-                     color="crimson", linewidth=1.5,
-                     label="Realistic (10ms latency + fees)")
+                     color=RED, linewidth=2.0,
+                     label="Realistic  (10ms latency · VIP0 fees · queue model)")
 
-    ax_main.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    ax_main.set_xlabel("Time (seconds into test period)")
-    ax_main.set_ylabel("Cumulative PnL ($)")
-    ax_main.set_title("Naive vs Realistic Cumulative PnL\n"
-                      "Gap = latency cost + fee drag + missed fills",
-                      fontsize=12)
-    ax_main.legend(fontsize=10)
-    ax_main.grid(alpha=0.3)
+    ax_main.axhline(0, color=GRAY, linewidth=0.8, linestyle="--", alpha=0.6)
 
-    # ── Fee drag over time ────────────────────────────────────────────────────
-    ax_fees = fig.add_subplot(gs[1, 0])
-    if not real_pnl.empty:
-        ax_fees.plot(t_real, real_pnl["cum_fees"],
-                     color="darkorange", linewidth=1.2)
-        ax_fees.set_title("Cumulative Fee Drag (Realistic)")
-        ax_fees.set_xlabel("Time (seconds)")
-        ax_fees.set_ylabel("Fees paid ($)")
-        ax_fees.grid(alpha=0.3)
+    # Annotate the gap at the end of the shorter series
+    if not naive_pnl.empty and not real_pnl.empty:
+        # Find where realistic ends
+        x_ann  = float(t_real.iloc[-1])
+        y_real = float(real_pnl["cum_pnl"].iloc[-1])
+        y_naive_at_end = float(naive_pnl["cum_pnl"].iloc[
+            min(len(naive_pnl) - 1,
+                int(x_ann / (t_naive.iloc[-1] / len(t_naive))))
+        ])
+        gap = naive_sum["total_pnl"] - real_sum["total_pnl"]
 
-    # ── Fill price distribution ───────────────────────────────────────────────
-    ax_dist = fig.add_subplot(gs[1, 1])
-    if not naive_fills.empty:
-        ax_dist.hist(naive_fills["fill_price"], bins=30,
-                     alpha=0.6, color="steelblue",
-                     label="Naive", density=True)
-    if not real_fills.empty:
-        ax_dist.hist(real_fills["fill_price"], bins=30,
-                     alpha=0.6, color="crimson",
-                     label="Realistic", density=True)
-    ax_dist.set_title("Fill Price Distribution")
-    ax_dist.set_xlabel("Fill price ($)")
-    ax_dist.set_ylabel("Density")
-    ax_dist.legend(fontsize=9)
-    ax_dist.grid(alpha=0.3)
+        ax_main.annotate(
+            f"Gap = ${gap:.2f}\n(fees + latency\n+ queue rejection)",
+            xy=(x_ann * 0.6, (y_real + y_naive_at_end) / 2),
+            xytext=(x_ann * 0.72, 15),
+            fontsize=9,
+            color=GRAY,
+            arrowprops=dict(arrowstyle="-", color=GRAY, lw=1.0),
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                      edgecolor=GRAY, alpha=0.8),
+        )
 
-    # ── PnL decomposition bar chart ───────────────────────────────────────────
-    ax_decomp = fig.add_subplot(gs[2, 0])
-    naive_sum = compute_summary(naive_fills,  "Naive")
-    real_sum  = compute_summary(real_fills,   "Realistic")
+        # Shade the gap region
+        min_len = min(len(naive_pnl), len(real_pnl))
+        t_shared     = t_naive.iloc[:min_len].values
+        naive_shared = naive_pnl["cum_pnl"].iloc[:min_len].values
+        real_shared  = real_pnl["cum_pnl"].iloc[:min_len].values
+        ax_main.fill_between(t_shared, real_shared, naive_shared,
+                             alpha=0.08, color=GRAY, label="Gap (shaded)")
 
-    categories = ["Gross PnL", "Fee Drag", "Net PnL"]
-    naive_vals = [
+    ax_main.set_xlabel("Time into test period (seconds)", fontsize=11)
+    ax_main.set_ylabel("Cumulative PnL ($)", fontsize=11)
+    ax_main.set_title(
+        "Naive vs Realistic Cumulative PnL",
+        fontsize=13, fontweight="bold", pad=10,
+    )
+    ax_main.legend(fontsize=9, loc="upper left", framealpha=0.9)
+    ax_main.grid(alpha=0.25, linewidth=0.6)
+    ax_main.tick_params(labelsize=10)
+
+    # ── Bottom panel: PnL decomposition bar chart ─────────────────────────────
+    categories  = ["Gross PnL", "Fee Drag", "Net PnL"]
+    naive_vals  = [
         naive_sum.get("gross_pnl", 0),
         -naive_sum.get("total_fees", 0),
         naive_sum.get("total_pnl", 0),
@@ -216,62 +230,58 @@ def plot_headline_chart(naive_fills: pd.DataFrame,
     ]
 
     x     = np.arange(len(categories))
-    width = 0.35
-    ax_decomp.bar(x - width/2, naive_vals, width,
-                  color="steelblue", alpha=0.7, label="Naive")
-    ax_decomp.bar(x + width/2, real_vals,  width,
-                  color="crimson",   alpha=0.7, label="Realistic")
-    ax_decomp.axhline(0, color="black", linewidth=0.8)
+    width = 0.32
+
+    bars_n = ax_decomp.bar(x - width / 2, naive_vals, width,
+                            color=BLUE, alpha=0.75, label="Naive",
+                            zorder=3)
+    bars_r = ax_decomp.bar(x + width / 2, real_vals, width,
+                            color=RED, alpha=0.75, label="Realistic",
+                            zorder=3)
+
+    # Value labels on bars
+    for bar in list(bars_n) + list(bars_r):
+        h = bar.get_height()
+        if abs(h) > 0.5:
+            ax_decomp.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + (1.5 if h >= 0 else -4.5),
+                f"${h:.1f}",
+                ha="center",
+                va="top" if h < 0 else "bottom",
+                fontsize=8, color="#1F2937",
+            )
+
+    ax_decomp.axhline(0, color=GRAY, linewidth=0.8, linestyle="--", alpha=0.6)
     ax_decomp.set_xticks(x)
-    ax_decomp.set_xticklabels(categories)
-    ax_decomp.set_ylabel("$ Amount")
-    ax_decomp.set_title("PnL Decomposition")
-    ax_decomp.legend(fontsize=9)
-    ax_decomp.grid(alpha=0.3, axis="y")
+    ax_decomp.set_xticklabels(categories, fontsize=11)
+    ax_decomp.set_ylabel("$ Amount", fontsize=11)
+    ax_decomp.set_title("PnL Decomposition", fontsize=12,
+                         fontweight="bold", pad=8)
+    ax_decomp.legend(fontsize=9, framealpha=0.9)
+    ax_decomp.grid(alpha=0.25, linewidth=0.6, axis="y", zorder=0)
+    ax_decomp.tick_params(labelsize=10)
 
-    # ── Summary text ──────────────────────────────────────────────────────────
-    ax_text = fig.add_subplot(gs[2, 1])
-    ax_text.axis("off")
-
-    gap = naive_sum.get("total_pnl", 0) - real_sum.get("total_pnl", 0)
-    summary_text = (
-        f"SUMMARY\n"
-        f"{'─'*35}\n"
-        f"{'':20s} {'Naive':>8s} {'Real':>8s}\n"
-        f"{'Gross PnL':20s} "
-        f"${naive_sum.get('gross_pnl', 0):>7.2f} "
-        f"${real_sum.get('gross_pnl', 0):>7.2f}\n"
-        f"{'Fee drag':20s} "
-        f"${-naive_sum.get('total_fees', 0):>7.2f} "
-        f"${-real_sum.get('total_fees', 0):>7.2f}\n"
-        f"{'Net PnL':20s} "
-        f"${naive_sum.get('total_pnl', 0):>7.2f} "
-        f"${real_sum.get('total_pnl', 0):>7.2f}\n"
-        f"{'Fills':20s} "
-        f"{naive_sum.get('n_fills', 0):>8d} "
-        f"{real_sum.get('n_fills', 0):>8d}\n"
-        f"{'Max drawdown':20s} "
-        f"${naive_sum.get('max_dd', 0):>7.2f} "
-        f"${real_sum.get('max_dd', 0):>7.2f}\n"
-        f"{'─'*35}\n"
-        f"PnL gap: ${gap:.2f}\n"
-        f"(naive overstates PnL by "
-        f"{abs(gap)/max(abs(naive_sum.get('total_pnl',1)),0.01)*100:.0f}%)"
+    # ── Footer ────────────────────────────────────────────────────────────────
+    fig.text(
+        0.5, 0.01,
+        f"BTCUSDT · 30-min sample · "
+        f"Naive: +${naive_sum['total_pnl']:.2f}  "
+        f"Realistic: ${real_sum['total_pnl']:.2f}  "
+        f"Gap: ${naive_sum['total_pnl'] - real_sum['total_pnl']:.2f}  "
+        f"· Fills: {naive_sum['n_fills']} naive / {real_sum['n_fills']} realistic",
+        ha="center", fontsize=8, color=GRAY,
     )
-    ax_text.text(0.05, 0.95, summary_text,
-                 transform=ax_text.transAxes,
-                 fontsize=9, verticalalignment="top",
-                 fontfamily="monospace",
-                 bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
-    plt.suptitle("MicrostructureLab — Execution Simulation Results",
-                 fontsize=13, fontweight="bold")
+    plt.suptitle(
+        "MicrostructureLab — Execution Simulation",
+        fontsize=14, fontweight="bold", y=0.98,
+    )
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
 
     out = FIGURES / "headline_pnl_chart.png"
-    plt.savefig(out, dpi=150, bbox_inches="tight")
-    plt.show()
+    plt.savefig(out, dpi=150, bbox_inches="tight", facecolor=BG)
     print(f"Headline chart saved to {out}")
-
 
 def run(symbol: str = "BTCUSDT") -> None:
     print("=" * 60)
