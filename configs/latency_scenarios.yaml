@@ -1,0 +1,29 @@
+# Latency stress test scenarios
+# base_ms: fixed order-submission latency in milliseconds
+# jitter_ms: random jitter added on top (0 = deterministic)
+
+scenarios:
+  zero:
+    base_ms: 0.0
+    jitter_ms: 0.0
+    description: "No latency — theoretical upper bound"
+
+  fast:
+    base_ms: 10.0
+    jitter_ms: 0.0
+    description: "10ms — baseline realistic latency"
+
+  medium:
+    base_ms: 50.0
+    jitter_ms: 0.0
+    description: "50ms — slow colocated or VPN latency"
+
+  slow:
+    base_ms: 100.0
+    jitter_ms: 0.0
+    description: "100ms — retail/cloud latency"
+
+  jittery:
+    base_ms: 10.0
+    jitter_ms: 5.0
+    description: "10ms base + 5ms jitter — realistic with network variance"
