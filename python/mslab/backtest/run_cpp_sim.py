@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 
 from mslab.configs.fees import load_fees, FeeConfig
 from mslab.backtest.queue_model import load_queue_config, QueueModel, QueueConfig
+from mslab.backtest.markout import compute_markouts, markout_summary 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "cpp" / "build"))
@@ -226,6 +227,15 @@ def run_simulation(latency_ms: float = LATENCY_MS,
         "is_maker"  : f.is_maker,
     } for f in fills]) if fills else pd.DataFrame()
 
+    # ── Markout calculation ───────────────────────────────────────────────────
+    if not fills_df.empty:
+        fills_df   = compute_markouts(fills_df, feat_df)
+        mo_summary = markout_summary(fills_df)
+        print(f"\n  Markout summary (adverse selection proxy):")
+        print(mo_summary.to_string(index=False))
+    else:
+        mo_summary = pd.DataFrame()
+        
     return {
         "label"        : label,
         "fills_df"     : fills_df,
@@ -236,8 +246,8 @@ def run_simulation(latency_ms: float = LATENCY_MS,
         "n_orders"     : n_orders,
         "n_fills"      : len(fills),
         "ic_test"      : ridge_results["ic_test"],
+        "markout_summary": mo_summary,
     }
-
 
 def run(symbol: str = SYMBOL) -> None:
     print("=" * 60)
