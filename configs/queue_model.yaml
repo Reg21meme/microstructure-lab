@@ -1,0 +1,33 @@
+# Queue-position approximation parameters
+#
+# Model: fill_prob = 1 - depth_ahead_fraction, clipped to [min_fill_prob, 1.0]
+# depth_ahead_fraction derived from depth_imbalance_5 in the feature snapshot
+#
+# Scenarios let us ablate queue sensitivity in Week 7
+
+default: &default
+  min_fill_prob: 0.10      # floor: even deep-queue orders have 10% fill chance
+  max_fill_prob: 1.00      # ceiling
+  use_queue_model: true    # false = always fill (naive mode)
+  random_seed: 42          # for reproducibility
+
+scenarios:
+  naive:
+    <<: *default
+    use_queue_model: false
+    min_fill_prob: 1.0
+    description: "Always fill — ignores queue position"
+
+  conservative:
+    <<: *default
+    min_fill_prob: 0.05    # harsher floor — deep queue orders rarely fill
+    description: "Pessimistic queue: low floor fill probability"
+
+  base:
+    <<: *default
+    description: "Base queue model with 10% floor"
+
+  optimistic:
+    <<: *default
+    min_fill_prob: 0.30    # generous floor
+    description: "Optimistic queue: higher floor fill probability"

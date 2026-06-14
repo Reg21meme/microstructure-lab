@@ -13,14 +13,15 @@ Workflow:
 Usage:
     python3 -m mslab.backtest.run_cpp_sim
 """
-from mslab.configs.fees import load_fees, FeeConfig
 
 import sys
 import pathlib
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
-import pickle
+
+from mslab.configs.fees import load_fees, FeeConfig
+from mslab.backtest.queue_model import load_queue_config, QueueModel, QueueConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "cpp" / "build"))
@@ -32,13 +33,14 @@ from mslab.models.train_baseline import (
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-SYMBOL        = "BTCUSDT"
-LATENCY_MS    = 10.0       # simulated order latency
-FEE_SCENARIO  = "binance_vip0"
-MAX_POSITION  = 1.0        # max 1 BTC position
-MAX_DRAWDOWN  = 5000.0      # kill switch at $500 loss
-SIGNAL_THRESH = 0.10       # minimum predicted move to trigger order (dollars)
-ORDER_SIZE    = 0.01       # order size in BTC per trade
+SYMBOL         = "BTCUSDT"
+LATENCY_MS     = 10.0
+FEE_SCENARIO   = "binance_vip0"
+QUEUE_SCENARIO = "base"
+MAX_POSITION   = 1.0
+MAX_DRAWDOWN   = 5000.0
+SIGNAL_THRESH  = 0.10
+ORDER_SIZE     = 0.01
 
 
 def make_sim(latency_ms: float = LATENCY_MS,
@@ -46,147 +48,104 @@ def make_sim(latency_ms: float = LATENCY_MS,
     """Create a configured ExecutionSim instance."""
     if fee_cfg is None:
         fee_cfg = load_fees(FEE_SCENARIO)
-
-    latency        = mb.LatencyModel(base_ms=latency_ms, jitter_ms=0.0)
-    fees           = mb.FeeModel()
-    fees.taker_fee = fee_cfg.taker_fee
-    fees.maker_fee = fee_cfg.maker_fee
-    limits         = mb.RiskLimits()
+    latency             = mb.LatencyModel(base_ms=latency_ms, jitter_ms=0.0)
+    fees                = mb.FeeModel()
+    fees.taker_fee      = fee_cfg.taker_fee
+    fees.maker_fee      = fee_cfg.maker_fee
+    limits              = mb.RiskLimits()
     limits.max_position = MAX_POSITION
     limits.max_drawdown = MAX_DRAWDOWN
     return mb.ExecutionSim(SYMBOL, latency, fees, limits)
 
+
 def load_updates() -> pd.DataFrame:
-    """Load normalized L2 updates sorted by sequence number."""
     path = ROOT / "data" / "normalized" / f"{SYMBOL}_updates.parquet"
     df   = pq.read_table(path).to_pandas()
-    df   = df.sort_values("seq").reset_index(drop=True)
-    return df
+    return df.sort_values("seq").reset_index(drop=True)
 
 
 def load_snapshot_rows() -> pd.DataFrame:
-    """Load snapshot rows."""
     path = ROOT / "data" / "normalized" / f"{SYMBOL}_snapshot.parquet"
     return pq.read_table(path).to_pandas()
 
 
-def initialize_book(sim: mb.ExecutionSim,
-                    snap_rows: pd.DataFrame) -> None:
-    """Load snapshot into sim's internal book."""
-    snapshot_seq = None
-    for _, row in snap_rows.iterrows():
-        is_bid = row["side"] == "bid"
-        sim_book_update_snapshot(sim, row["price"], row["size"],
-                                 is_bid, row["seq"])
-        snapshot_seq = row["seq"]
-
-
-def sim_book_update_snapshot(sim: mb.ExecutionSim,
-                              price: float, size: float,
-                              is_bid: bool, seq: int) -> None:
-    """Apply a snapshot row as a book update at ts=0."""
-    sim.on_book_update(price, size, is_bid, 0, seq, seq)
-
-
-def generate_signal(model,
-                    scaler,
-                    features: pd.Series) -> float:
-    """
-    Generate a trading signal from the ridge model.
-
-    Returns predicted future mid-price move in dollars.
-    Positive = predict up, negative = predict down.
-    """
+def generate_signal(model, scaler, features: pd.Series) -> float:
     X = scaler.transform(features[FEATURE_COLS].values.reshape(1, -1))
     return float(model.predict(X)[0])
 
 
 def run_simulation(latency_ms: float = LATENCY_MS,
                    fee_cfg: FeeConfig | None = None,
-                   label:      str   = "realistic") -> dict:
-    """
-    Run the full backtest simulation.
-
-    Parameters
-    ----------
-    latency_ms : order latency in milliseconds
-    taker_fee  : taker fee rate
-    maker_fee  : maker rebate rate (negative = receive)
-    label      : label for this run (e.g. 'naive', 'realistic')
-
-    Returns
-    -------
-    dict with fills, pnl_series, and summary statistics
-    """
+                   queue_cfg: QueueConfig | None = None,
+                   label: str = "realistic") -> dict:
     print(f"\nRunning simulation: {label}")
     print(f"  Latency={latency_ms}ms")
+
     # ── Load and split data ───────────────────────────────────────────────────
     feat_df     = load_clean_data(SYMBOL)
     train, test = time_split(feat_df, train_frac=0.7)
 
-    # ── Train model on training set only ─────────────────────────────────────
+    # ── Train model ───────────────────────────────────────────────────────────
     ridge_results = train_ridge(train, test)
     model         = ridge_results["model"]
     scaler        = ridge_results["scaler"]
-
     print(f"  Model trained: test IC={ridge_results['ic_test']:.4f}")
 
     # ── Load L2 updates ───────────────────────────────────────────────────────
-    upd_rows  = load_updates()
-    snap_rows = load_snapshot_rows()
-
-    # Find the timestamp cutoff for test period
-    # test starts at 70% of feature rows
+    upd_rows      = load_updates()
+    snap_rows     = load_snapshot_rows()
     test_start_ts = test["ts_local"].iloc[0]
     print(f"  Test period starts at ts={test_start_ts}")
 
-    # ── Create and initialize sim ─────────────────────────────────────────────
+    # ── Create sim ────────────────────────────────────────────────────────────
     if fee_cfg is None:
         fee_cfg = load_fees(FEE_SCENARIO)
     sim = make_sim(latency_ms, fee_cfg)
-    print(f"  Fee scenario: {fee_cfg.scenario} "
+    print(f"  Fee scenario     : {fee_cfg.scenario} "
           f"(maker={fee_cfg.maker_fee}, taker={fee_cfg.taker_fee})")
 
-    # Initialize book from snapshot
+    if queue_cfg is None:
+        queue_cfg = load_queue_config(QUEUE_SCENARIO)
+    queue_model = QueueModel(queue_cfg)
+    print(f"  Queue scenario   : {queue_cfg.scenario} "
+          f"(use_model={queue_cfg.use_queue_model}, "
+          f"min_prob={queue_cfg.min_fill_prob})")
+
+    # ── Initialize book from snapshot ─────────────────────────────────────────
     snapshot_seq = int(snap_rows["seq"].iloc[0])
     for _, row in snap_rows.iterrows():
-        is_bid = row["side"] == "bid"
-        sim.on_book_update(row["price"], row["size"], is_bid,
+        sim.on_book_update(row["price"], row["size"],
+                           row["side"] == "bid",
                            0, snapshot_seq, snapshot_seq)
 
     # ── Replay updates and generate signals ───────────────────────────────────
-    last_signal_ts  = -1
-    signal_interval = 1_000  # generate signal every 1000ms = 1s
-    n_signals       = 0
-    n_orders        = 0
-    in_test_period  = False
-
-    # Build feature lookup by timestamp for signal generation
-    feat_by_ts = feat_df.set_index("ts_local")
+    feat_by_ts     = feat_df.set_index("ts_local")
+    last_signal_ts = -1
+    signal_interval = 1_000
+    n_signals      = 0
+    n_orders       = 0
+    in_test_period = False
 
     for _, row in upd_rows.iterrows():
-        ts_ms  = int(row["ts_local"])
-        ts_ns  = ts_ms * 1_000_000  # convert ms to ns
+        ts_ms = int(row["ts_local"])
+        ts_ns = ts_ms * 1_000_000
 
-        # Check if we've entered the test period
         if ts_ms >= test_start_ts:
             in_test_period = True
 
-        # Apply book update to sim
         sim.on_book_update(
             float(row["price"]),
             float(row["size"]),
             row["side"] == "bid",
             ts_ns,
             int(row["seq_start"]),
-            int(row["seq"])
+            int(row["seq"]),
         )
 
         if sim.is_killed():
             print(f"  Risk kill switch triggered at ts={ts_ms}")
             break
 
-        # Generate signal only in test period, at 1s intervals
         if not in_test_period:
             continue
         if ts_ms - last_signal_ts < signal_interval:
@@ -195,70 +154,56 @@ def run_simulation(latency_ms: float = LATENCY_MS,
         last_signal_ts = ts_ms
         n_signals     += 1
 
-        # Find nearest feature row for this timestamp
-        # Use the most recent feature snapshot at or before this ts
         available = feat_by_ts[feat_by_ts.index <= ts_ms]
         if available.empty:
             continue
 
         feat_row = available.iloc[-1]
-
-        # Check for NaN in features
         if feat_row[FEATURE_COLS].isna().any():
             continue
 
-        # Generate signal
         predicted_move = generate_signal(model, scaler, feat_row)
+        mid            = feat_row["mid_price"]
+        position       = sim.position().position
 
-        mid      = feat_row["mid_price"]
-        position = sim.position().position
+        # ── Queue-position fill gate ──────────────────────────────────────────
+        def maybe_submit(side_is_buy: bool, order_type, price: float,
+                         size: float) -> None:
+            filled, prob = queue_model.should_fill(
+                side_is_buy, float(feat_row["depth_imbalance_5"])
+            )
+            if filled:
+                nonlocal n_orders
+                n_orders += 1
+                sim.submit_order(
+                    mb.Side.BUY if side_is_buy else mb.Side.SELL,
+                    order_type, price, size, ts_ns,
+                )
 
         # ── Entry and exit logic ──────────────────────────────────────────────
         if predicted_move > SIGNAL_THRESH:
-            # Signal predicts up
             if position < MAX_POSITION:
-                # Buy to open or add to long
-                n_orders += 1
-                sim.submit_order(mb.Side.BUY, mb.OrderType.LIMIT,
-                                 mid + 0.01, ORDER_SIZE, ts_ns)
+                maybe_submit(True, mb.OrderType.LIMIT, mid + 0.01, ORDER_SIZE)
             elif position < 0:
-                # Close short position
-                n_orders += 1
-                sim.submit_order(mb.Side.BUY, mb.OrderType.LIMIT,
-                                 mid + 0.01,
-                                 min(ORDER_SIZE, abs(position)),
-                                 ts_ns)
+                maybe_submit(True, mb.OrderType.LIMIT, mid + 0.01,
+                             min(ORDER_SIZE, abs(position)))
 
         elif predicted_move < -SIGNAL_THRESH:
-            # Signal predicts down
             if position > -MAX_POSITION:
-                # Sell to open or add to short
-                n_orders += 1
-                sim.submit_order(mb.Side.SELL, mb.OrderType.LIMIT,
-                                 mid - 0.01, ORDER_SIZE, ts_ns)
+                maybe_submit(False, mb.OrderType.LIMIT, mid - 0.01, ORDER_SIZE)
             elif position > 0:
-                # Close long position
-                n_orders += 1
-                sim.submit_order(mb.Side.SELL, mb.OrderType.LIMIT,
-                                 mid - 0.01,
-                                 min(ORDER_SIZE, position),
-                                 ts_ns)
+                maybe_submit(False, mb.OrderType.LIMIT, mid - 0.01,
+                             min(ORDER_SIZE, position))
 
         else:
-            # Signal near zero — go flat if holding a position
             if abs(position) > ORDER_SIZE / 2:
-                n_orders += 1
                 if position > 0:
-                    sim.submit_order(mb.Side.SELL, mb.OrderType.IOC,
-                                     mid - 0.01,
-                                     min(ORDER_SIZE, position),
-                                     ts_ns)
+                    maybe_submit(False, mb.OrderType.IOC, mid - 0.01,
+                                 min(ORDER_SIZE, position))
                 else:
-                    sim.submit_order(mb.Side.BUY, mb.OrderType.IOC,
-                                     mid + 0.01,
-                                     min(ORDER_SIZE, abs(position)),
-                                     ts_ns)
-                    
+                    maybe_submit(True, mb.OrderType.IOC, mid + 0.01,
+                                 min(ORDER_SIZE, abs(position)))
+
     # ── Collect results ───────────────────────────────────────────────────────
     fills    = sim.fills()
     position = sim.position()
@@ -271,19 +216,15 @@ def run_simulation(latency_ms: float = LATENCY_MS,
     print(f"  Fee drag          : ${position.fee_drag:.2f}")
     print(f"  Net PnL           : ${position.realized_pnl - position.fee_drag:.2f}")
 
-    # Convert fills to DataFrame
-    if fills:
-        fills_df = pd.DataFrame([{
-            "order_id"  : f.order_id,
-            "side"      : "buy" if f.side == mb.Side.BUY else "sell",
-            "fill_price": f.fill_price,
-            "fill_size" : f.fill_size,
-            "fee"       : f.fee,
-            "fill_ts_ns": f.fill_ts_ns,
-            "is_maker"  : f.is_maker,
-        } for f in fills])
-    else:
-        fills_df = pd.DataFrame()
+    fills_df = pd.DataFrame([{
+        "order_id"  : f.order_id,
+        "side"      : "buy" if f.side == mb.Side.BUY else "sell",
+        "fill_price": f.fill_price,
+        "fill_size" : f.fill_size,
+        "fee"       : f.fee,
+        "fill_ts_ns": f.fill_ts_ns,
+        "is_maker"  : f.is_maker,
+    } for f in fills]) if fills else pd.DataFrame()
 
     return {
         "label"        : label,
@@ -306,14 +247,17 @@ def run(symbol: str = SYMBOL) -> None:
     naive = run_simulation(
         latency_ms = 0.0,
         fee_cfg    = load_fees("naive"),
-        label      = "naive (no fees, no latency)",
+        queue_cfg  = load_queue_config("naive"),
+        label      = "naive (no fees, no latency, no queue)",
     )
 
     realistic = run_simulation(
         latency_ms = LATENCY_MS,
         fee_cfg    = load_fees("binance_vip0"),
-        label      = "realistic (10ms latency + fees)",
+        queue_cfg  = load_queue_config("base"),
+        label      = "realistic (10ms latency + fees + queue)",
     )
+
     # ── Comparison ────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("NAIVE vs REALISTIC COMPARISON")
@@ -335,7 +279,7 @@ def run(symbol: str = SYMBOL) -> None:
 
     pnl_gap = naive["net_pnl"] - realistic["net_pnl"]
     print(f"\nPnL gap (naive - realistic): ${pnl_gap:.2f}")
-    print("This gap = latency cost + fee drag + missed fills")
+    print("This gap = latency cost + fee drag + missed fills + queue rejection")
 
     # ── Save results ──────────────────────────────────────────────────────────
     output_dir = ROOT / "data" / "results"
