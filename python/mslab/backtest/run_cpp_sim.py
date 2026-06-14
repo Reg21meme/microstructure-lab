@@ -13,6 +13,7 @@ Workflow:
 Usage:
     python3 -m mslab.backtest.run_cpp_sim
 """
+from mslab.configs.fees import load_fees, FeeConfig
 
 import sys
 import pathlib
@@ -33,8 +34,7 @@ from mslab.models.train_baseline import (
 
 SYMBOL        = "BTCUSDT"
 LATENCY_MS    = 10.0       # simulated order latency
-TAKER_FEE     = 0.0004     # Binance taker fee
-MAKER_FEE     = -0.0001    # Binance maker rebate
+FEE_SCENARIO  = "binance_vip0"
 MAX_POSITION  = 1.0        # max 1 BTC position
 MAX_DRAWDOWN  = 5000.0      # kill switch at $500 loss
 SIGNAL_THRESH = 0.10       # minimum predicted move to trigger order (dollars)
@@ -42,18 +42,19 @@ ORDER_SIZE    = 0.01       # order size in BTC per trade
 
 
 def make_sim(latency_ms: float = LATENCY_MS,
-             taker_fee: float  = TAKER_FEE,
-             maker_fee: float  = MAKER_FEE) -> mb.ExecutionSim:
+             fee_cfg: FeeConfig | None = None) -> mb.ExecutionSim:
     """Create a configured ExecutionSim instance."""
+    if fee_cfg is None:
+        fee_cfg = load_fees(FEE_SCENARIO)
+
     latency        = mb.LatencyModel(base_ms=latency_ms, jitter_ms=0.0)
     fees           = mb.FeeModel()
-    fees.taker_fee = taker_fee
-    fees.maker_fee = maker_fee
+    fees.taker_fee = fee_cfg.taker_fee
+    fees.maker_fee = fee_cfg.maker_fee
     limits         = mb.RiskLimits()
     limits.max_position = MAX_POSITION
     limits.max_drawdown = MAX_DRAWDOWN
     return mb.ExecutionSim(SYMBOL, latency, fees, limits)
-
 
 def load_updates() -> pd.DataFrame:
     """Load normalized L2 updates sorted by sequence number."""
@@ -101,8 +102,7 @@ def generate_signal(model,
 
 
 def run_simulation(latency_ms: float = LATENCY_MS,
-                   taker_fee:  float = TAKER_FEE,
-                   maker_fee:  float = MAKER_FEE,
+                   fee_cfg: FeeConfig | None = None,
                    label:      str   = "realistic") -> dict:
     """
     Run the full backtest simulation.
@@ -119,9 +119,7 @@ def run_simulation(latency_ms: float = LATENCY_MS,
     dict with fills, pnl_series, and summary statistics
     """
     print(f"\nRunning simulation: {label}")
-    print(f"  Latency={latency_ms}ms, taker_fee={taker_fee}, "
-          f"maker_fee={maker_fee}")
-
+    print(f"  Latency={latency_ms}ms")
     # ── Load and split data ───────────────────────────────────────────────────
     feat_df     = load_clean_data(SYMBOL)
     train, test = time_split(feat_df, train_frac=0.7)
@@ -143,7 +141,11 @@ def run_simulation(latency_ms: float = LATENCY_MS,
     print(f"  Test period starts at ts={test_start_ts}")
 
     # ── Create and initialize sim ─────────────────────────────────────────────
-    sim = make_sim(latency_ms, taker_fee, maker_fee)
+    if fee_cfg is None:
+        fee_cfg = load_fees(FEE_SCENARIO)
+    sim = make_sim(latency_ms, fee_cfg)
+    print(f"  Fee scenario: {fee_cfg.scenario} "
+          f"(maker={fee_cfg.maker_fee}, taker={fee_cfg.taker_fee})")
 
     # Initialize book from snapshot
     snapshot_seq = int(snap_rows["seq"].iloc[0])
@@ -301,22 +303,17 @@ def run(symbol: str = SYMBOL) -> None:
     print("EXECUTION SIMULATION")
     print("=" * 60)
 
-    # ── Naive run: zero latency, zero fees, large position limit ─────────────
     naive = run_simulation(
         latency_ms = 0.0,
-        taker_fee  = 0.0,
-        maker_fee  = 0.0,
+        fee_cfg    = load_fees("naive"),
         label      = "naive (no fees, no latency)",
     )
 
-    # ── Realistic run: 10ms latency, real fees ────────────────────────────────
     realistic = run_simulation(
         latency_ms = LATENCY_MS,
-        taker_fee  = TAKER_FEE,
-        maker_fee  = MAKER_FEE,
+        fee_cfg    = load_fees("binance_vip0"),
         label      = "realistic (10ms latency + fees)",
     )
-
     # ── Comparison ────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("NAIVE vs REALISTIC COMPARISON")
