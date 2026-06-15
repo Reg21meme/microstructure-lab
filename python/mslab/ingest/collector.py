@@ -240,4 +240,7 @@ def collect(symbol: str = "BTCUSDT",
 
 
 if __name__ == "__main__":
-    collect("BTCUSDT", duration_seconds=30)
+    import sys
+    symbol   = sys.argv[1] if len(sys.argv) > 1 else "BTCUSDT"
+    duration = int(sys.argv[2]) if len(sys.argv) > 2 else 1800
+    collect(symbol, duration_seconds=duration)
