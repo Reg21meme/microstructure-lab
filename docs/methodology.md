@@ -21,8 +21,9 @@ L2 book synchronization procedure:
 This guarantees no sequence gap between snapshot and live updates.
 Sequence gaps in subsequent updates are detected and flagged.
 
-**Symbols collected:** BTCUSDT (30 minutes, 393,394 updates),
-ETHUSDT (35 minutes, 776,714 updates).
+**Symbols collected:** BTCUSDT (full trading day June 1 2025 via Tardis
+historical datasets, 19,443,879 updates, 85,078 feature snapshots),
+ETHUSDT (35 minutes live collection, 776,714 updates).
 
 **Storage:** Normalized to `(ts_exchange, ts_local, seq, side, price,
 size, update_type)` and stored as Parquet via PyArrow.
@@ -72,8 +73,7 @@ Positive OFI = more buying pressure than selling pressure.
 ### Multi-Level OFI (MLOFI)
 OFI extended to 10 price levels. The first principal component
 (MLOFI PC1) summarizes the dominant direction of order flow across
-all levels. PC1 explains ~22% of variance on BTCUSDT (short sample;
-expected to increase with more data).
+all levels. PC1 explains 19.2% of variance on full-day BTCUSDT data.
 
 ### Book pressure
 book_pressure = sum(bid_size_i / bid_price_i)
@@ -139,8 +139,8 @@ IC = 0.32 ± 0.04 at the 5-second horizon.
 
 ### Information Coefficient (IC)
 Pearson correlation between predicted and realized
-`future_mid_move_5`. IC = 0.29 on the held-out test set (last 30%
-of data by time).
+`future_mid_move_5`. IC = 0.258 on the held-out test set (last 30% of data by time,
+57,785 rows spanning ~8 hours of BTCUSDT data).
 
 ### Newey-West (HAC) standard errors
 IC is computed on overlapping 5-second return windows, inducing
@@ -193,9 +193,11 @@ Maker-taker model loaded from `configs/fees.yaml`:
 - Taker fee: 0.04% (4 bps) — paid when crossing the spread
 - Maker rebate: 0.01% (1 bp) — received when resting in book
 
-All 326 realistic fills are taker fills (orders priced to cross
-the spread). Fee drag = $67.47 on a $5.19 gross PnL.
-Breakeven taker fee: **0.31 bps** — 13× below Binance VIP0.
+All 19,196 realistic fills are taker fills (orders priced to cross
+the spread). Fee drag = $7,893 on a $1,440 gross PnL.
+Total notional traded: $19.7M. Breakeven taker fee: **0.73 bps** —
+5.5× below Binance VIP0. Fee per fill = $0.41 vs gross edge per
+fill = $0.075 — the strategy is fee-dominated at retail rates.
 
 ### Queue-position approximation
 At order submission, fill probability is approximated from the
@@ -205,7 +207,7 @@ depth_ahead_fraction = (1 - depth_imbalance_5) / 2
 
 fill_prob = clip(1 - depth_ahead_fraction, min=0.10, max=1.0)
 A uniform draw determines whether the order enters the sim.
-The queue model rejects ~22% of orders (298 → 268 submitted)
+The queue model rejects ~25% of orders (24,954 → 18,810 submitted)
 and reduces fee drag proportionally.
 
 **Limitation:** This approximates queue position from displayed
@@ -218,9 +220,9 @@ Post-fill mid-price move at fixed horizons:
 markout(T, h) = mid(T+h) - fill_price   [for buy fills]
 
 markout(T, h) = fill_price - mid(T+h)   [for sell fills]
-Positive markout = market moved in your favor. Mean markout at 1s
-= $0.92/fill (t-stat = 5.99), indicating no adverse selection on
-this trending sample.
+Mean markout at 1s = $1.11/fill (t-stat = 25.6 on 19,194 fills),
+indicating no adverse selection — the market moves in favor of
+fills on average.
 
 **Limitation:** Markouts at 100ms and 500ms horizons are aliased
 to the 1s snapshot grid. Tick-level markouts require replaying
@@ -231,10 +233,11 @@ the full book at each horizon.
 ## 7. Robustness
 
 ### Fee sensitivity
-Net PnL degrades linearly with taker fee. Breakeven at 0.31 bps.
-At Binance VIP0 (4 bps), the strategy loses $16.87 per basis point
-of additional fee — directly derivable as
-`n_fills × order_size × avg_price × fee_rate`.
+Net PnL degrades linearly with taker fee. Breakeven at 0.73 bps
+(full-day data, 19,196 fills, $19.7M notional). At Binance VIP0
+(4 bps), fee drag = $7,893 vs gross PnL = $1,440 — a 5.5× gap.
+Fee drag per fill ($0.41) exceeds gross edge per fill ($0.075),
+making the strategy fee-dominated at any retail fee tier.
 
 ### Confidence threshold sweep
 Raising `SIGNAL_THRESH` from $0.05 to $1.00 monotonically
@@ -252,32 +255,34 @@ the BTCUSDT result was inflated by a trending 30-minute sample.
 ### Feature ablation
 | Feature | IC drop (removed) | Standalone IC |
 |---|---|---|
-| micro_price_deviation | -0.032 (10.9%) | 0.282 |
-| depth_imbalance_5 | -0.029 (10.0%) | 0.259 |
-| spread | -0.020 (6.8%) | -0.097 |
-| realized_vol | -0.009 (2.9%) | -0.004 |
-| mlofi_pc1 | -0.000 (0.2%) | 0.090 |
-| ofi | +0.001 (-0.4%) | 0.019 |
+| depth_imbalance_5 | -0.246 (95.2%) | 0.012 |
+| spread | -0.022 (8.5%) | 0.006 |
+| micro_price_deviation | -0.011 (4.4%) | 0.025 |
+| realized_vol | -0.001 (0.4%) | -0.029 |
+| mlofi_pc1 | -0.001 (0.2%) | 0.030 |
+| ofi | -0.000 (0.1%) | 0.004 |
 
-`micro_price_deviation` and `depth_imbalance_5` carry ~90% of
-the signal. OFI has near-zero marginal value on this short sample.
-`spread` shows a suppression effect: negative standalone IC but
-positive contribution in combination.
+`depth_imbalance_5` dominates on full-day data — removing it drops
+IC by 95.2%. This contrasts with the 30-minute trending sample where
+`micro_price_deviation` was most important (10.9% drop). Feature
+importance is regime-dependent: depth imbalance captures mean-reverting
+microstructure while micro-price deviation captures trending momentum.
 
 ---
 
 ## 8. Limitations and Honest Assessment
 
-1. **Short sample:** All results are on 30–35 minute samples.
-   IC and PnL figures are expected to change materially on a
-   full trading day. A trending sample inflates both IC and
-   naive PnL.
+1. **Single day:** Primary results are on June 1 2025 BTCUSDT
+   (full trading day, Tardis historical data). IC on the full
+   day (0.258) is lower than the initial 30-minute trending
+   sample (0.290), confirming the short sample was inflated.
+   Multi-day generalization requires additional Tardis data.
 
 2. **Fee dominance:** The strategy is unprofitable at any
    realistic retail fee level. It would require institutional
-   fee tiers (< 0.31 bps) or a higher-frequency signal to
+   fee tiers (< 0.73 bps) or a higher-frequency signal to
    overcome transaction costs.
-
+   
 3. **1-second signal frequency:** At 1s intervals, latency
    sensitivity is negligible. The strategy is not a latency
    race — it is a microstructure signal research project.
