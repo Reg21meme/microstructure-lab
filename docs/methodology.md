@@ -59,9 +59,9 @@ micro_price = best_ask * q_bid / (q_bid + q_ask)
 
 + best_bid * q_ask / (q_bid + q_ask)
 micro_price_deviation = micro_price - mid
-`micro_price_deviation` is the most predictive single feature in
-ablation (standalone IC = 0.28, ~10% IC drop when removed from
-the full model).
+On full-day data, `micro_price_deviation` ranks third in feature
+ablation (standalone IC = 0.025, 4.4% IC drop when removed).
+`depth_imbalance_5` is the dominant feature (95.2% IC drop).
 
 ### Order Flow Imbalance (OFI)
 Following Cont, Kukanov & Stoikov (2014):
@@ -244,17 +244,16 @@ Fee drag per fill ($0.41) exceeds gross edge per fill ($0.075),
 making the strategy fee-dominated at any retail fee tier.
 
 ### Confidence threshold sweep
-Raising `SIGNAL_THRESH` from $0.05 to $1.00 monotonically
-reduces fill count and fee drag but does not improve net PnL
-to positive. Gross PnL is insensitive to threshold, suggesting
-the signal edge is distributed across all confidence levels
-rather than concentrated at high-conviction moments — consistent
-with a linear ridge model.
+Full-day sweep across $0.05 to $1.00 shows non-monotonic behavior.
+Best net PnL at $0.05 (-$474, 4,818 fills) — high-conviction moments
+yield better gross PnL per fill ($1,506 on 4,818 fills vs $1,440 on
+19,196 fills at $0.10). The strategy remains unprofitable at all
+tested thresholds due to fee dominance.
 
 ### Symbol generalization
-IC generalizes to ETHUSDT (0.31 vs 0.29 on BTCUSDT). Naive PnL
-on ETHUSDT is near zero ($0.05), vs +$30.27 on BTCUSDT, confirming
-the BTCUSDT result was inflated by a trending 30-minute sample.
+IC generalizes to ETHUSDT (0.31 vs 0.258 on BTCUSDT). ETHUSDT
+was collected on a 35-minute live sample with near-zero naive PnL
+($0.05), consistent with no strong directional trend in that window.
 
 ### Feature ablation
 | Feature | IC drop (removed) | Standalone IC |
