@@ -134,8 +134,10 @@ Following López de Prado (2018), cross-validation uses:
   IC is inflated by autocorrelated features bleeding across the
   fold boundary.
 
-5-fold purged/embargoed walk-forward CV on BTCUSDT gives
-IC = 0.32 ± 0.04 at the 5-second horizon.
+Walk-forward CV on full-day BTCUSDT gives IC = 0.267 at the
+5-second horizon (NW t-stat = 54.53, 85,078 feature snapshots).
+IC decays to 0.260 at 10s and 0.244 at 20s — consistent with
+a short-horizon microstructure signal.
 
 ### Information Coefficient (IC)
 Pearson correlation between predicted and realized
@@ -147,7 +149,9 @@ IC is computed on overlapping 5-second return windows, inducing
 serial autocorrelation in the IC time series. Standard OLS standard
 errors would understate uncertainty. Newey-West heteroskedasticity
 and autocorrelation consistent (HAC) standard errors correct for
-this, giving a t-statistic of 39.7 at the 5-second horizon.
+this, giving a t-statistic of 54.53 at the 5-second horizon
+(85,078 observations, full trading day).
+
 
 The Newey-West lag truncation is set to `floor(4 * (T/100)^(2/9))`
 following the standard data-driven rule.
@@ -282,7 +286,7 @@ microstructure while micro-price deviation captures trending momentum.
    realistic retail fee level. It would require institutional
    fee tiers (< 0.73 bps) or a higher-frequency signal to
    overcome transaction costs.
-   
+
 3. **1-second signal frequency:** At 1s intervals, latency
    sensitivity is negligible. The strategy is not a latency
    race — it is a microstructure signal research project.
